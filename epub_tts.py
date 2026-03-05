@@ -165,26 +165,32 @@ async def convert_chapter(
 
     print(f"  [{index}/{total}] {chapter['title']}  ({len(chapter['text'])} chars)")
 
-    chunks = chunk_text(chapter["text"])
+    # Strip title from start of body text if present (clean_text includes heading text)
+    title = chapter["title"].strip()
+    body = chapter["text"]
+    if body.lower().startswith(title.lower()):
+        body = body[len(title):].lstrip()
 
-    if len(chunks) == 1:
-        await _tts_chunk(chapter["text"], str(output_file), voice)
-    else:
-        # Convert each chunk to a temporary file, then concatenate raw bytes.
-        # Raw MP3 concatenation works because each file starts with valid
-        # MPEG frames; most players handle it correctly.
-        with tempfile.TemporaryDirectory() as tmpdir:
-            chunk_paths = []
-            for ci, chunk in enumerate(chunks):
-                chunk_path = os.path.join(tmpdir, f"chunk_{ci:04d}.mp3")
-                print(f"     chunk {ci + 1}/{len(chunks)}")
-                await _tts_chunk(chunk, chunk_path, voice)
-                chunk_paths.append(chunk_path)
+    chunks = chunk_text(body)
 
-            with open(output_file, "wb") as out:
-                for cp in chunk_paths:
-                    with open(cp, "rb") as f:
-                        out.write(f.read())
+    # TTS the title as its own audio chunk, then the body chunks in sequence.
+    # Concatenating separate TTS files produces a natural ~0.9 s gap between
+    # the title and the body (the end-of-speech silence edge-tts adds).
+    all_parts = [title] + chunks
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        chunk_paths = []
+        for ci, part in enumerate(all_parts):
+            chunk_path = os.path.join(tmpdir, f"chunk_{ci:04d}.mp3")
+            label = "title" if ci == 0 else f"chunk {ci}/{len(chunks)}"
+            print(f"     {label}")
+            await _tts_chunk(part, chunk_path, voice)
+            chunk_paths.append(chunk_path)
+
+        with open(output_file, "wb") as out:
+            for cp in chunk_paths:
+                with open(cp, "rb") as f:
+                    out.write(f.read())
 
     return output_file
 
